@@ -10,25 +10,28 @@ import os
 
 # Constants for API configuration
 HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/"
-DEEPSEEK_MODELS = {
+AVAILABLE_MODELS = {
+    # Start with commonly available models
+    "gpt2": "GPT-2 Base Model",
+    "distilgpt2": "Distilled GPT-2 (Smaller, Faster)",
+    "facebook/opt-125m": "OPT 125M Model",
+    "bigscience/bloom-560m": "BLOOM 560M Model",
+    "EleutherAI/gpt-neo-125M": "GPT-Neo 125M",
+    # DeepSeek models
     "deepseek-ai/deepseek-coder-6.7b-base": "Code generation model (6.7B)",
     "deepseek-ai/deepseek-coder-33b-base": "Code generation model (33B)",
     "deepseek-ai/deepseek-math-7b-base": "Math problem solving (7B)",
-    "deepseek-ai/deepseek-math-7b-instruct": "Math instruction (7B)",
 }
 
 def debug_api_key():
     """Debug API key configuration"""
     try:
-        # Check if API key exists in secrets
         if 'hf_api_key' not in st.secrets:
             return False, "API key not found in secrets"
         
-        # Check if API key is empty
         if not st.secrets['hf_api_key']:
             return False, "API key is empty"
         
-        # Check if API key starts with 'hf_'
         if not st.secrets['hf_api_key'].startswith('hf_'):
             return False, "API key format is invalid"
         
@@ -38,7 +41,6 @@ def debug_api_key():
 
 class CloudLLMClient:
     def __init__(self):
-        # Get API key and validate
         api_key_valid, message = debug_api_key()
         if not api_key_valid:
             st.error(f"API Key Configuration Error: {message}")
@@ -55,14 +57,19 @@ class CloudLLMClient:
             if not self.api_key:
                 return False
                 
+            # Test with a basic model to verify access
             response = requests.get(
-                "https://huggingface.co/api/models",
-                headers=self.headers,
-                params={"author": "deepseek-ai"}
+                f"{HUGGINGFACE_API_URL}gpt2/",
+                headers=self.headers
             )
             
             if response.status_code == 401:
-                st.error("API Key is invalid. Please check your API key configuration.")
+                st.error("""
+                API Key is invalid or lacks necessary permissions. Please:
+                1. Visit https://huggingface.co/settings/tokens
+                2. Create a new token with 'read' and 'inference' permissions
+                3. Update your API key in Streamlit settings
+                """)
                 return False
                 
             if response.status_code != 200:
@@ -102,9 +109,22 @@ class CloudLLMClient:
             response = client.text_generation(
                 prompt,
                 max_new_tokens=max_length,
-                temperature=temperature
+                temperature=temperature,
+                do_sample=True
             )
             return True, response
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                return False, """Error: Unauthorized access. Please:
+                1. Visit https://huggingface.co/settings/tokens
+                2. Create a new token with 'read' and 'inference' permissions
+                3. Accept the model's terms of use at its Hugging Face page
+                4. Update your API key in Streamlit settings"""
+            elif e.response.status_code == 403:
+                model_url = f"https://huggingface.co/{model_id}"
+                return False, f"Error: You need to accept the terms of use for this model at {model_url}"
+            else:
+                return False, f"Error: {str(e)}"
         except Exception as e:
             return False, f"Error generating response: {str(e)}"
 
@@ -112,10 +132,10 @@ def initialize_session_state():
     """Initialize session state variables"""
     if 'messages' not in st.session_state:
         st.session_state.messages = [
-            {"role": "assistant", "content": "Hello! I'm DeepSeek, how can I help you today?"}
+            {"role": "assistant", "content": "Hello! How can I help you today?"}
         ]
     if 'model_id' not in st.session_state:
-        st.session_state.model_id = list(DEEPSEEK_MODELS.keys())[0]
+        st.session_state.model_id = "gpt2"  # Start with a more accessible model
     if 'temperature' not in st.session_state:
         st.session_state.temperature = 0.7
     if 'max_length' not in st.session_state:
@@ -175,15 +195,13 @@ def render_model_info(client):
 
 def main():
     st.set_page_config(
-        page_title="Cloud DeepSeek Chat",
+        page_title="Cloud LLM Chat",
         page_icon="🤖",
         layout="wide"
     )
 
-    # Initialize session state
     initialize_session_state()
 
-    # Custom CSS
     st.markdown("""
         <style>
         .stTextInput>div>div>input {
@@ -199,7 +217,6 @@ def main():
         </style>
         """, unsafe_allow_html=True)
 
-    # Debug section in sidebar
     with st.sidebar:
         st.title("🔧 Debug Information")
         with st.expander("Show Debug Info"):
@@ -214,19 +231,17 @@ def main():
 
         st.title("⚙️ Settings")
         
-        # Model selection
         selected_model = st.selectbox(
             "Select Model",
-            options=list(DEEPSEEK_MODELS.keys()),
-            format_func=lambda x: f"{x.split('/')[-1]} - {DEEPSEEK_MODELS[x]}",
-            index=list(DEEPSEEK_MODELS.keys()).index(st.session_state.model_id)
+            options=list(AVAILABLE_MODELS.keys()),
+            format_func=lambda x: f"{x.split('/')[-1]} - {AVAILABLE_MODELS[x]}",
+            index=list(AVAILABLE_MODELS.keys()).index(st.session_state.model_id)
         )
         
         if selected_model != st.session_state.model_id:
             st.session_state.model_id = selected_model
             st.rerun()
 
-        # Generation settings
         st.subheader("Generation Settings")
         temperature = st.slider(
             "Temperature",
@@ -254,41 +269,36 @@ def main():
             st.session_state.max_length = max_length
             st.rerun()
 
-        # Clear chat button
         if st.button("Clear Chat"):
             st.session_state.messages = [
-                {"role": "assistant", "content": "Hello! I'm DeepSeek, how can I help you today?"}
+                {"role": "assistant", "content": "Hello! How can I help you today?"}
             ]
             st.rerun()
 
-    # Initialize client
     client = CloudLLMClient()
     
-    # Check API status
     if not client.check_api_status():
         st.warning("""
         Please ensure you have:
         1. Added the correct API key to Streamlit secrets
         2. The API key starts with 'hf_'
-        3. You have an active internet connection
-        4. The Hugging Face API service is available
+        3. Your API key has 'read' and 'inference' permissions
+        4. You have an active internet connection
         
-        To add your API key:
-        1. Click ⋮ (three dots) in the top right corner
-        2. Select 'Settings'
-        3. Click 'Secrets'
-        4. Add: hf_api_key = "your_api_key_here"
+        To fix this:
+        1. Visit https://huggingface.co/settings/tokens
+        2. Create a new token with required permissions
+        3. Click ⋮ (three dots) in the top right
+        4. Select 'Settings' → 'Secrets'
+        5. Add: hf_api_key = "your_new_api_key"
         """)
         return
 
-    # Main interface
-    st.title("💬 DeepSeek Chat")
+    st.title("💬 Language Model Chat")
     
-    # Show model info
     with st.expander("📊 Model Information", expanded=False):
         render_model_info(client)
     
-    # Render chat interface
     render_chat_interface(client)
 
 if __name__ == "__main__":
