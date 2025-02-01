@@ -1,7 +1,5 @@
 # appy.py
 #dev
-# appy.py
-#dev
 import streamlit as st
 from huggingface_hub import HfApi, InferenceClient
 import json
