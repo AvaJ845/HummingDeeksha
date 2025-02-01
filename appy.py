@@ -1,3 +1,5 @@
+#appy.py
+#dev
 import streamlit as st
 from huggingface_hub import HfApi, InferenceClient
 import json
@@ -5,6 +7,10 @@ import requests
 import time
 from datetime import datetime
 import os
+import asyncio
+
+# Get API key from Streamlit secrets
+api_key = st.secrets["hf_api_key"]
 
 # Constants for API configuration
 HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/"
@@ -16,10 +22,10 @@ DEEPSEEK_MODELS = {
 }
 
 class CloudLLMClient:
-    def __init__(self, api_key):
+    def __init__(self):
         self.api_key = api_key
-        self.headers = {"Authorization": f"Bearer {api_key}"}
-        self.api = HfApi(token=api_key)
+        self.headers = {"Authorization": f"Bearer {self.api_key}"}
+        self.api = HfApi(token=self.api_key)
         
     def check_api_status(self):
         """Check if the API key is valid and service is accessible"""
@@ -47,15 +53,17 @@ class CloudLLMClient:
             st.error(f"Error fetching model info: {str(e)}")
             return None
 
-    async def generate_response(self, model_id, prompt, max_length=1000, temperature=0.7):
+    def generate_response(self, model_id, prompt, max_length=1000, temperature=0.7):
         """Generate response from the model"""
         try:
-            client = InferenceClient(model=model_id, token=self.api_key)
-            response = await client.text_generation(
+            client = InferenceClient(
+                model=model_id,
+                token=self.api_key
+            )
+            response = client.text_generation(
                 prompt,
                 max_new_tokens=max_length,
-                temperature=temperature,
-                stream=True
+                temperature=temperature
             )
             return True, response
         except Exception as e:
@@ -69,8 +77,6 @@ def initialize_session_state():
         ]
     if 'model_id' not in st.session_state:
         st.session_state.model_id = list(DEEPSEEK_MODELS.keys())[0]
-    if 'api_key' not in st.session_state:
-        st.session_state.api_key = ""
 
 def render_chat_interface(client):
     """Render the chat interface"""
@@ -88,17 +94,20 @@ def render_chat_interface(client):
 
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
-            full_response = ""
             
-            # Get streaming response
-            success, response_stream = await client.generate_response(
+            success, response = client.generate_response(
                 st.session_state.model_id,
-                prompt
+                prompt,
+                max_length=st.session_state.get('max_length', 1000),
+                temperature=st.session_state.get('temperature', 0.7)
             )
             
             if success:
-                async for token in response_stream:
-                    full_response += token + " "
+                # Split response into words and stream them
+                words = response.split()
+                full_response = ""
+                for word in words:
+                    full_response += word + " "
                     time.sleep(0.02)
                     message_placeholder.markdown(full_response + "▌")
                 message_placeholder.markdown(full_response)
@@ -106,7 +115,7 @@ def render_chat_interface(client):
                     {"role": "assistant", "content": full_response}
                 )
             else:
-                message_placeholder.markdown(f"🚫 {response_stream}")
+                message_placeholder.markdown(f"🚫 {response}")
 
 def render_model_info(client):
     """Render model information and settings"""
@@ -148,20 +157,16 @@ def main():
         </style>
         """, unsafe_allow_html=True)
 
-    # Sidebar for settings and API key
+    # Sidebar for settings
     with st.sidebar:
         st.title("⚙️ Settings")
         
-        # API Key input
-        api_key = st.text_input(
-            "Enter Hugging Face API Key",
-            type="password",
-            value=st.session_state.api_key
-        )
-        
-        if api_key != st.session_state.api_key:
-            st.session_state.api_key = api_key
-            st.rerun()
+        # Show API status
+        if api_key:
+            st.success("✅ API Key configured")
+        else:
+            st.error("❌ API Key not found in secrets. Please configure it in the app settings.")
+            return
 
         # Model selection
         selected_model = st.selectbox(
@@ -177,20 +182,20 @@ def main():
 
         # Generation settings
         st.subheader("Generation Settings")
-        temperature = st.slider(
+        st.session_state.temperature = st.slider(
             "Temperature",
             min_value=0.1,
             max_value=1.0,
-            value=0.7,
+            value=st.session_state.get('temperature', 0.7),
             step=0.1,
             help="Higher values make the output more random, lower values make it more focused."
         )
         
-        max_length = st.slider(
+        st.session_state.max_length = st.slider(
             "Max Length",
             min_value=100,
             max_value=2000,
-            value=1000,
+            value=st.session_state.get('max_length', 1000),
             step=100,
             help="Maximum number of tokens to generate."
         )
@@ -202,25 +207,12 @@ def main():
             ]
             st.rerun()
 
-    # Main content
-    if not st.session_state.api_key:
-        st.error("""
-        🔑 Please enter your Hugging Face API key in the sidebar to continue.
-        
-        To get an API key:
-        1. Go to https://huggingface.co/
-        2. Create an account or sign in
-        3. Go to Settings > Access Tokens
-        4. Create a new token with read access
-        """)
-        return
-
     # Initialize client
-    client = CloudLLMClient(st.session_state.api_key)
+    client = CloudLLMClient()
     
     # Check API status
     if not client.check_api_status():
-        st.error("❌ Invalid API key or service unavailable. Please check your API key and try again.")
+        st.error("❌ API key invalid or service unavailable. Please check your configuration.")
         return
 
     # Main interface
