@@ -1,5 +1,3 @@
-#appy.py
-#dev
 # appy.py
 #dev
 import streamlit as st
@@ -86,7 +84,147 @@ def debug_api_key():
     except Exception as e:
         return False, f"Error checking API key: {str(e)}"
 
-[Previous CloudLLMClient class and other functions remain the same...]
+class CloudLLMClient:
+    def __init__(self):
+        api_key_valid, message = debug_api_key()
+        if not api_key_valid:
+            st.error(f"API Key Configuration Error: {message}")
+            self.api_key = None
+            return
+            
+        self.api_key = st.secrets["hf_api_key"]
+        self.headers = {"Authorization": f"Bearer {self.api_key}"}
+        self.api = HfApi(token=self.api_key)
+
+    def check_api_status(self):
+        """Check if the API key is valid and service is accessible"""
+        try:
+            if not self.api_key:
+                return False
+                
+            # Test with a basic model to verify access
+            response = requests.get(
+                f"{HUGGINGFACE_API_URL}gpt2/",
+                headers=self.headers
+            )
+            
+            if response.status_code == 401:
+                st.error("""
+                API Key is invalid or lacks necessary permissions. Please:
+                1. Visit https://huggingface.co/settings/tokens
+                2. Create a new token with 'read' and 'inference' permissions
+                3. Update your API key in Streamlit settings
+                """)
+                return False
+                
+            if response.status_code != 200:
+                st.error(f"API request failed with status code: {response.status_code}")
+                return False
+                
+            return True
+        except requests.exceptions.ConnectionError:
+            st.error("Cannot connect to Hugging Face API. Please check your internet connection.")
+            return False
+        except Exception as e:
+            st.error(f"Unexpected error checking API status: {str(e)}")
+            return False
+
+    def get_model_info(self, model_id):
+        """Get information about a specific model"""
+        try:
+            model_info = self.api.model_info(model_id)
+            return {
+                "name": model_info.modelId,
+                "downloads": model_info.downloads,
+                "likes": model_info.likes,
+                "last_modified": model_info.lastModified,
+                "tags": model_info.tags
+            }
+        except Exception as e:
+            st.error(f"Error fetching model info: {str(e)}")
+            return None
+
+    def generate_response(self, model_id, prompt, max_length=1000, temperature=0.7):
+        """Generate response from the model"""
+        try:
+            client = InferenceClient(
+                model=model_id,
+                token=self.api_key
+            )
+            response = client.text_generation(
+                prompt,
+                max_new_tokens=max_length,
+                temperature=temperature,
+                do_sample=True
+            )
+            return True, response
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                return False, """Error: Unauthorized access. Please:
+                1. Visit https://huggingface.co/settings/tokens
+                2. Create a new token with 'read' and 'inference' permissions
+                3. Accept the model's terms of use at its Hugging Face page
+                4. Update your API key in Streamlit settings"""
+            elif e.response.status_code == 403:
+                model_url = f"https://huggingface.co/{model_id}"
+                return False, f"Error: You need to accept the terms of use for this model at {model_url}"
+            else:
+                return False, f"Error: {str(e)}"
+        except Exception as e:
+            return False, f"Error generating response: {str(e)}"
+
+def initialize_session_state():
+    """Initialize session state variables"""
+    if 'messages' not in st.session_state:
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Hello! How can I help you today?"}
+        ]
+    if 'model_id' not in st.session_state:
+        st.session_state.model_id = "gpt2"  # Start with a more accessible model
+    if 'temperature' not in st.session_state:
+        st.session_state.temperature = 0.7
+    if 'max_length' not in st.session_state:
+        st.session_state.max_length = 1000
+    if 'selected_category' not in st.session_state:
+        st.session_state.selected_category = list(MODEL_CATEGORIES.keys())[0]
+
+def render_chat_interface(client):
+    """Render the chat interface"""
+    chat_container = st.container()
+    
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+    if prompt := st.chat_input("Type your message here..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            
+            success, response = client.generate_response(
+                st.session_state.model_id,
+                prompt,
+                max_length=st.session_state.max_length,
+                temperature=st.session_state.temperature
+            )
+            
+            if success:
+                words = response.split()
+                full_response = ""
+                for word in words:
+                    full_response += word + " "
+                    time.sleep(0.02)
+                    message_placeholder.markdown(full_response + "▌")
+                message_placeholder.markdown(full_response)
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": full_response}
+                )
+            else:
+                message_placeholder.markdown(f"🚫 {response}")
 
 def render_model_info(client):
     """Render model information and settings"""
@@ -159,7 +297,8 @@ def main():
         st.subheader("🤖 Model Selection")
         category = st.selectbox(
             "Select Category",
-            options=list(MODEL_CATEGORIES.keys())
+            options=list(MODEL_CATEGORIES.keys()),
+            key="model_category"
         )
         
         # Filter models by selected category
