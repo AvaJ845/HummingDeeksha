@@ -1,4 +1,4 @@
 streamlit 
 requests
-ollama 
+huggingface_hub 
 pillow
