@@ -167,7 +167,13 @@ class CloudLLMClient:
                 4. Update your API key in Streamlit settings"""
             elif e.response.status_code == 403:
                 model_url = f"https://huggingface.co/{model_id}"
-                return False, f"Error: You need to accept the terms of use for this model at {model_url}"
+                return False, f"""Error: Model requires acceptance of terms of use. Please:
+                1. Visit {model_url}
+                2. Click the 'Accept terms & conditions' button
+                3. Sign in to your Hugging Face account if needed
+                4. Return here to try again
+                
+                Model page: {model_url}"""
             else:
                 return False, f"Error: {str(e)}"
         except Exception as e:
