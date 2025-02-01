@@ -7,10 +7,6 @@ import requests
 import time
 from datetime import datetime
 import os
-import asyncio
-
-# Get API key from Streamlit secrets
-api_key = st.secrets["hf_api_key"]
 
 # Constants for API configuration
 HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/"
@@ -21,21 +17,64 @@ DEEPSEEK_MODELS = {
     "deepseek-ai/deepseek-math-7b-instruct": "Math instruction (7B)",
 }
 
+def debug_api_key():
+    """Debug API key configuration"""
+    try:
+        # Check if API key exists in secrets
+        if 'hf_api_key' not in st.secrets:
+            return False, "API key not found in secrets"
+        
+        # Check if API key is empty
+        if not st.secrets['hf_api_key']:
+            return False, "API key is empty"
+        
+        # Check if API key starts with 'hf_'
+        if not st.secrets['hf_api_key'].startswith('hf_'):
+            return False, "API key format is invalid"
+        
+        return True, "API key format is valid"
+    except Exception as e:
+        return False, f"Error checking API key: {str(e)}"
+
 class CloudLLMClient:
     def __init__(self):
-        self.api_key = api_key
+        # Get API key and validate
+        api_key_valid, message = debug_api_key()
+        if not api_key_valid:
+            st.error(f"API Key Configuration Error: {message}")
+            self.api_key = None
+            return
+            
+        self.api_key = st.secrets["hf_api_key"]
         self.headers = {"Authorization": f"Bearer {self.api_key}"}
         self.api = HfApi(token=self.api_key)
-        
+
     def check_api_status(self):
         """Check if the API key is valid and service is accessible"""
         try:
-            test_response = requests.get(
-                "https://huggingface.co/api/whoami",
-                headers=self.headers
+            if not self.api_key:
+                return False
+                
+            response = requests.get(
+                "https://huggingface.co/api/models",
+                headers=self.headers,
+                params={"author": "deepseek-ai"}
             )
-            return test_response.status_code == 200
-        except Exception:
+            
+            if response.status_code == 401:
+                st.error("API Key is invalid. Please check your API key configuration.")
+                return False
+                
+            if response.status_code != 200:
+                st.error(f"API request failed with status code: {response.status_code}")
+                return False
+                
+            return True
+        except requests.exceptions.ConnectionError:
+            st.error("Cannot connect to Hugging Face API. Please check your internet connection.")
+            return False
+        except Exception as e:
+            st.error(f"Unexpected error checking API status: {str(e)}")
             return False
 
     def get_model_info(self, model_id):
@@ -77,6 +116,10 @@ def initialize_session_state():
         ]
     if 'model_id' not in st.session_state:
         st.session_state.model_id = list(DEEPSEEK_MODELS.keys())[0]
+    if 'temperature' not in st.session_state:
+        st.session_state.temperature = 0.7
+    if 'max_length' not in st.session_state:
+        st.session_state.max_length = 1000
 
 def render_chat_interface(client):
     """Render the chat interface"""
@@ -98,12 +141,11 @@ def render_chat_interface(client):
             success, response = client.generate_response(
                 st.session_state.model_id,
                 prompt,
-                max_length=st.session_state.get('max_length', 1000),
-                temperature=st.session_state.get('temperature', 0.7)
+                max_length=st.session_state.max_length,
+                temperature=st.session_state.temperature
             )
             
             if success:
-                # Split response into words and stream them
                 words = response.split()
                 full_response = ""
                 for word in words:
@@ -157,17 +199,21 @@ def main():
         </style>
         """, unsafe_allow_html=True)
 
-    # Sidebar for settings
+    # Debug section in sidebar
     with st.sidebar:
+        st.title("🔧 Debug Information")
+        with st.expander("Show Debug Info"):
+            key_valid, key_message = debug_api_key()
+            st.write(f"API Key Status: {key_message}")
+            
+            if 'hf_api_key' in st.secrets:
+                masked_key = st.secrets['hf_api_key'][:5] + "..." + st.secrets['hf_api_key'][-4:]
+                st.write(f"API Key Format: {masked_key}")
+            else:
+                st.write("API Key: Not found in secrets")
+
         st.title("⚙️ Settings")
         
-        # Show API status
-        if api_key:
-            st.success("✅ API Key configured")
-        else:
-            st.error("❌ API Key not found in secrets. Please configure it in the app settings.")
-            return
-
         # Model selection
         selected_model = st.selectbox(
             "Select Model",
@@ -182,23 +228,31 @@ def main():
 
         # Generation settings
         st.subheader("Generation Settings")
-        st.session_state.temperature = st.slider(
+        temperature = st.slider(
             "Temperature",
             min_value=0.1,
             max_value=1.0,
-            value=st.session_state.get('temperature', 0.7),
+            value=st.session_state.temperature,
             step=0.1,
             help="Higher values make the output more random, lower values make it more focused."
         )
         
-        st.session_state.max_length = st.slider(
+        max_length = st.slider(
             "Max Length",
             min_value=100,
             max_value=2000,
-            value=st.session_state.get('max_length', 1000),
+            value=st.session_state.max_length,
             step=100,
             help="Maximum number of tokens to generate."
         )
+
+        if temperature != st.session_state.temperature:
+            st.session_state.temperature = temperature
+            st.rerun()
+
+        if max_length != st.session_state.max_length:
+            st.session_state.max_length = max_length
+            st.rerun()
 
         # Clear chat button
         if st.button("Clear Chat"):
@@ -212,7 +266,19 @@ def main():
     
     # Check API status
     if not client.check_api_status():
-        st.error("❌ API key invalid or service unavailable. Please check your configuration.")
+        st.warning("""
+        Please ensure you have:
+        1. Added the correct API key to Streamlit secrets
+        2. The API key starts with 'hf_'
+        3. You have an active internet connection
+        4. The Hugging Face API service is available
+        
+        To add your API key:
+        1. Click ⋮ (three dots) in the top right corner
+        2. Select 'Settings'
+        3. Click 'Secrets'
+        4. Add: hf_api_key = "your_api_key_here"
+        """)
         return
 
     # Main interface
