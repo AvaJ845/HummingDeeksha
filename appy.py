@@ -1,5 +1,7 @@
 # appy.py
 #dev
+# appy.py
+#dev
 import streamlit as st
 from huggingface_hub import HfApi, InferenceClient
 import json
@@ -230,20 +232,7 @@ def render_model_info(client):
     """Render model information and settings"""
     st.header("Model Information")
     
-    # Add educational section about model creators
-    st.subheader("📚 About the Models")
-    
-    for category_name, models in MODEL_CATEGORIES.items():
-        with st.expander(f"{category_name}"):
-            for model_id, info in models.items():
-                st.markdown(f"""
-                **{info['name']}**  
-                🏢 Creator: {info['creator']}  
-                📝 Description: {info['description']}
-                """)
-                st.divider()
-    
-    # Display specific model info
+    # Display current model info first
     st.subheader("Current Model Statistics")
     model_info = client.get_model_info(st.session_state.model_id)
     if model_info:
@@ -254,6 +243,22 @@ def render_model_info(client):
         with col2:
             st.write("Last Modified:", model_info["last_modified"])
             st.write("Tags:", ", ".join(model_info["tags"]))
+    
+    # Add educational section about model creators
+    st.subheader("📚 About Available Models")
+    
+    # Create tabs for each category
+    tabs = st.tabs([category_name for category_name in MODEL_CATEGORIES.keys()])
+    
+    for idx, (category_name, models) in enumerate(MODEL_CATEGORIES.items()):
+        with tabs[idx]:
+            for model_id, info in models.items():
+                st.markdown(f"""
+                **{info['name']}**  
+                🏢 Creator: {info['creator']}  
+                📝 Description: {info['description']}
+                """)
+                st.divider()
 
 def main():
     st.set_page_config(
